@@ -1,0 +1,4 @@
+#!/bin/bash
+# Managed by Yosecula Tools. Refresh the screensaver when Yosecula is selected.
+[[ ${1,,} == yosecula ]] || exit 0
+exec python3 "$HOME/Projects/omarchy-yosecula-tools/screensaver.py"

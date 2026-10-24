@@ -1,0 +1,92 @@
+#!/bin/bash
+
+# omarchy:summary=Run Matrix rain with the active theme's palette.
+
+matrix_theme_args() {
+  local palette="$HOME/.local/state/omarchy/current/theme/matrix.json"
+  # The gallery theme contains only visual assets. Its optional white Matrix
+  # palette is installed by this companion; other themes may supply their own.
+  if [[ ! -r $palette && -r $HOME/.local/state/omarchy/current/theme.name ]] &&
+    [[ $(< "$HOME/.local/state/omarchy/current/theme.name") == yosecula ]]; then
+    palette="$HOME/.config/omarchy/matrix/palettes/yosecula.json"
+  fi
+  [[ -r $palette ]] || return 0
+  jq -er '
+    def color: type == "string" and test("^[0-9a-fA-F]{6}$");
+    def gradient: type == "array" and length > 0 and all(.[]; color);
+    select((.rain_color_gradient | gradient)
+      and (.highlight_color | color)
+      and (.final_gradient_stops | gradient))
+    | "--rain-color-gradient", .rain_color_gradient[],
+      "--highlight-color", .highlight_color,
+      "--final-gradient-stops", .final_gradient_stops[]
+  ' "$palette" 2>/dev/null
+}
+
+matrix_symbol_args() {
+  local glyphs="$HOME/.config/omarchy/matrix/glyphs.json"
+  [[ -r $glyphs ]] || return 0
+  jq -er '
+    select(type == "array" and length > 0
+      and all(.[]; type == "string" and length == 1 and test("^[^\\s\\p{M}\\p{Cc}]$")))
+    | "--rain-symbols", .[]
+  ' "$glyphs" 2>/dev/null
+}
+
+screensaver_in_focus() {
+  hyprctl activewindow -j | jq -e '.class == "org.omarchy.screensaver"' >/dev/null 2>&1
+}
+
+exit_screensaver() {
+  hyprctl eval 'hl.config({ cursor = { invisible = false } })' &>/dev/null || hyprctl keyword cursor:invisible false &>/dev/null || true
+  pkill -x ttfx 2>/dev/null
+  pkill -f '[o]rg.omarchy.screensaver' 2>/dev/null
+  exit 0
+}
+
+# Exit the screensaver on signals and input from keyboard and mouse
+trap exit_screensaver SIGINT SIGTERM SIGHUP SIGQUIT
+
+hyprctl eval 'hl.config({ cursor = { invisible = true } })' &>/dev/null || hyprctl keyword cursor:invisible true &>/dev/null
+
+tty=$(tty 2>/dev/null)
+
+# Terminals allocate the pty at the default 80x24 and only resize it once the
+# compositor has told the window how big it is. ttfx measures the terminal once,
+# at startup, so starting it before the resize lands sizes an 80x24 canvas and
+# paints it into the corner of a fullscreen window.
+wait_for_terminal_resize() {
+  local deadline=$((SECONDS + 2))
+  while ((SECONDS < deadline)) && [[ $(stty size 2>/dev/null) == "24 80" ]]; do
+    sleep 0.02
+  done
+}
+
+wait_for_terminal_resize
+
+while true; do
+  # Read the active theme each cycle. Missing or invalid palettes use green.
+  mapfile -t matrix_args < <(matrix_theme_args)
+  mapfile -t symbol_args < <(matrix_symbol_args)
+  # ttfx dims each column's trailing glyph to 65% brightness. For an all-white
+  # palette, use Foot's white foreground so those glyphs stay white too.
+  output_args=()
+  if ((${#matrix_args[@]})); then
+    output_args=(--no-color)
+    for arg in "${matrix_args[@]}"; do
+      if [[ $arg != --* && ${arg,,} != ffffff ]]; then
+        output_args=()
+        break
+      fi
+    done
+  fi
+  ttfx -i ~/.config/omarchy/branding/screensaver.txt \
+    --frame-rate 60 --canvas-width 0 --canvas-height 0 --reuse-canvas --anchor-canvas c --anchor-text c\
+    --no-eol --no-restore-cursor "${output_args[@]}" matrix "${matrix_args[@]}" "${symbol_args[@]}" &
+
+  while pgrep -t "${tty#/dev/}" -x ttfx >/dev/null; do
+    if read -n1 -t 1 || ! screensaver_in_focus; then
+      exit_screensaver
+    fi
+  done
+done

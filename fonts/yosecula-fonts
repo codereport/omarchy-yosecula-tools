@@ -1,0 +1,4 @@
+#!/bin/bash
+# Managed by Yosecula Tools. Reapply the fonts when Yosecula is selected.
+[[ ${1,,} == yosecula ]] || exit 0
+exec python3 "$HOME/Projects/omarchy-yosecula-tools/fonts.py"
